@@ -1,0 +1,18 @@
+[package]
+name = "artic"
+description = "create art at 60 fps"
+version = "0.1.0"
+authors = ["Terrence Cole <terrence.d.cole@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+failure = "^ 0.1.2"
+rand = "^ 0.7"
+raw-window-handle = "0.1"
+wgpu = "0.4"
+winit = "0.20.0-alpha5"
+zerocopy = "^ 0.2"
+gpu = { path = "libs/gpu" }
+
+[build-dependencies]
+build-shaders = { path = "libs/build-shaders" }
