@@ -18,9 +18,18 @@ layout(location = 0) in vec2 v_tex_coord;
 
 layout(location = 0) out vec4 f_color;
 
-layout(binding = 0) uniform texture2D result_texture;
-layout(binding = 1) uniform sampler result_sampler;
+layout(binding = 0) uniform texture2D r_texture;
+layout(binding = 1) uniform sampler r_sampler;
+layout(binding = 2) uniform texture2D g_texture;
+layout(binding = 3) uniform sampler g_sampler;
+layout(binding = 4) uniform texture2D b_texture;
+layout(binding = 5) uniform sampler b_sampler;
 
 void main() {
-    f_color = texture(sampler2D(result_texture, result_sampler), v_tex_coord);
+    f_color = vec4(
+        texture(sampler2D(r_texture, r_sampler), v_tex_coord).r,
+        texture(sampler2D(g_texture, g_sampler), v_tex_coord).r,
+        texture(sampler2D(b_texture, b_sampler), v_tex_coord).r,
+        1.0
+    );
 }

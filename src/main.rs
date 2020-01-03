@@ -14,11 +14,11 @@
 // along with Arctic.  If not, see <http://www.gnu.org/licenses/>.
 mod tree;
 
-use crate::tree::Tree;
-use gpu::GPU;
+use crate::tree::{InstructionEncoder, Tree, Node, AddOp};
 use failure::Fallible;
+use gpu::GPU;
 use rand::prelude::*;
-use std::mem;
+use std::{mem, time::Instant};
 use wgpu;
 use winit::{
     event::{Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -32,6 +32,21 @@ use zerocopy::{AsBytes, FromBytes};
 pub struct Vertex {
     position: [f32; 2],
     tex_coord: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(AsBytes, FromBytes, Copy, Clone, Debug, Default)]
+pub struct Configuration {
+    texture_size: [u32; 2],
+    texture_offsets: [u32; 2],
+}
+
+struct ComputeLayer {
+    instr_buffer: wgpu::Buffer,
+    pool_buffer: wgpu::Buffer,
+    texture: wgpu::Texture,
+    texture_view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
 }
 
 fn main() -> Fallible<()> {
@@ -48,12 +63,22 @@ fn main() -> Fallible<()> {
                     wgpu::BindGroupLayoutBinding {
                         binding: 0,
                         visibility: wgpu::ShaderStage::COMPUTE,
+                        ty: wgpu::BindingType::UniformBuffer { dynamic: false },
+                    },
+                    wgpu::BindGroupLayoutBinding {
+                        binding: 1,
+                        visibility: wgpu::ShaderStage::COMPUTE,
                         ty: wgpu::BindingType::StorageTexture {
                             dimension: wgpu::TextureViewDimension::D2,
                         },
                     },
                     wgpu::BindGroupLayoutBinding {
-                        binding: 1,
+                        binding: 2,
+                        visibility: wgpu::ShaderStage::COMPUTE,
+                        ty: wgpu::BindingType::UniformBuffer { dynamic: false },
+                    },
+                    wgpu::BindGroupLayoutBinding {
+                        binding: 3,
                         visibility: wgpu::ShaderStage::COMPUTE,
                         ty: wgpu::BindingType::UniformBuffer { dynamic: false },
                     },
@@ -72,36 +97,23 @@ fn main() -> Fallible<()> {
                     entry_point: "main",
                 },
             });
-    let instr_buffer_size = mem::size_of::<[i32; 1024]>() as wgpu::BufferAddress;
-    let instr_buffer = gpu.device().create_buffer(&wgpu::BufferDescriptor {
-        size: instr_buffer_size,
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::MAP_READ,
-    });
     // TODO: make configurable
-    let result_extent = wgpu::Extent3d {
+    let config_buffer_size = mem::size_of::<Configuration>() as wgpu::BufferAddress;
+    let config_buffer = gpu
+        .device()
+        .create_buffer_mapped(1, wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::MAP_READ)
+        .fill_from_slice(&[Configuration {
+            texture_size: [1920, 1080],
+            texture_offsets: [0, 420],
+        }]);
+    let texture_extent = wgpu::Extent3d {
         width: 1920,
         height: 1080,
         depth: 1,
     };
-    let result_texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
-        size: result_extent,
-        array_layer_count: 1,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsage::all(),
-    });
-    let result_texture_view = result_texture.create_view(&wgpu::TextureViewDescriptor {
-        format: wgpu::TextureFormat::Rgba32Float,
-        dimension: wgpu::TextureViewDimension::D2,
-        aspect: wgpu::TextureAspect::All,
-        base_mip_level: 0,
-        level_count: 1, // mip level
-        base_array_layer: 0,
-        array_layer_count: 1,
-    });
-    let result_texture_sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
+    let instr_buffer_size = InstructionEncoder::instruction_buffer_size();
+    let pool_buffer_size = InstructionEncoder::pool_buffer_size();
+    let texture_sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -112,22 +124,77 @@ fn main() -> Fallible<()> {
         lod_max_clamp: 9_999_999f32,
         compare_function: wgpu::CompareFunction::Never,
     });
-    let uni_shader_bind_group = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &uni_shader_layout,
-        bindings: &[
-            wgpu::Binding {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&result_texture_view),
-            },
-            wgpu::Binding {
-                binding: 1,
-                resource: wgpu::BindingResource::Buffer {
-                    buffer: &instr_buffer,
-                    range: 0..instr_buffer_size,
-                },
-            },
-        ],
-    });
+    let compute_buffers = (0..3)
+        .map(|_| {
+            let instr_buffer = gpu.device().create_buffer(&wgpu::BufferDescriptor {
+                size: instr_buffer_size,
+                usage: wgpu::BufferUsage::UNIFORM
+                    | wgpu::BufferUsage::MAP_READ
+                    | wgpu::BufferUsage::COPY_DST,
+            });
+            let pool_buffer = gpu.device().create_buffer(&wgpu::BufferDescriptor {
+                size: pool_buffer_size,
+                usage: wgpu::BufferUsage::UNIFORM
+                    | wgpu::BufferUsage::MAP_READ
+                    | wgpu::BufferUsage::COPY_DST,
+            });
+            let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+                size: texture_extent,
+                array_layer_count: 1,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Float,
+                usage: wgpu::TextureUsage::all(),
+            });
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
+                format: wgpu::TextureFormat::R32Float,
+                dimension: wgpu::TextureViewDimension::D2,
+                aspect: wgpu::TextureAspect::All,
+                base_mip_level: 0,
+                level_count: 1, // mip level
+                base_array_layer: 0,
+                array_layer_count: 1,
+            });
+            let bind_group = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &uni_shader_layout,
+                bindings: &[
+                    wgpu::Binding {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer {
+                            buffer: &config_buffer,
+                            range: 0..config_buffer_size,
+                        },
+                    },
+                    wgpu::Binding {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                    },
+                    wgpu::Binding {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Buffer {
+                            buffer: &instr_buffer,
+                            range: 0..instr_buffer_size,
+                        },
+                    },
+                    wgpu::Binding {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Buffer {
+                            buffer: &pool_buffer,
+                            range: 0..pool_buffer_size,
+                        },
+                    },
+                ],
+            });
+            ComputeLayer {
+                instr_buffer,
+                pool_buffer,
+                texture,
+                texture_view,
+                bind_group,
+            }
+        })
+        .collect::<Vec<_>>();
 
     // Screen Resources
     let graphics_layout = gpu
@@ -144,6 +211,32 @@ fn main() -> Fallible<()> {
                 },
                 wgpu::BindGroupLayoutBinding {
                     binding: 1,
+                    visibility: wgpu::ShaderStage::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler,
+                },
+                wgpu::BindGroupLayoutBinding {
+                    binding: 2,
+                    visibility: wgpu::ShaderStage::FRAGMENT,
+                    ty: wgpu::BindingType::SampledTexture {
+                        multisampled: true,
+                        dimension: wgpu::TextureViewDimension::D2,
+                    },
+                },
+                wgpu::BindGroupLayoutBinding {
+                    binding: 3,
+                    visibility: wgpu::ShaderStage::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler,
+                },
+                wgpu::BindGroupLayoutBinding {
+                    binding: 4,
+                    visibility: wgpu::ShaderStage::FRAGMENT,
+                    ty: wgpu::BindingType::SampledTexture {
+                        multisampled: true,
+                        dimension: wgpu::TextureViewDimension::D2,
+                    },
+                },
+                wgpu::BindGroupLayoutBinding {
+                    binding: 5,
                     visibility: wgpu::ShaderStage::FRAGMENT,
                     ty: wgpu::BindingType::Sampler,
                 },
@@ -238,19 +331,43 @@ fn main() -> Fallible<()> {
         bindings: &[
             wgpu::Binding {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&result_texture_view),
+                resource: wgpu::BindingResource::TextureView(&compute_buffers[0].texture_view),
             },
             wgpu::Binding {
                 binding: 1,
-                resource: wgpu::BindingResource::Sampler(&result_texture_sampler),
+                resource: wgpu::BindingResource::Sampler(&texture_sampler),
+            },
+            wgpu::Binding {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&compute_buffers[1].texture_view),
+            },
+            wgpu::Binding {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(&texture_sampler),
+            },
+            wgpu::Binding {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&compute_buffers[2].texture_view),
+            },
+            wgpu::Binding {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(&texture_sampler),
             },
         ],
     });
 
     let mut rng = thread_rng();
     let tree = Tree::new(&mut rng);
+    /*
+    let tree = Tree::with_layers(
+        Node::Add(AddOp::with_children(Node::Const(1f32), Node::Const(1f32))),
+        Node::Add(AddOp::with_children(Node::Const(0f32), Node::Const(0f32))),
+        Node::Add(AddOp::with_children(Node::Const(1f32), Node::Const(1f32))),
+    );
+    */
     println!("tree: {}", tree.show());
 
+    let mut last_redraw = Instant::now();
     event_loop.run(move |event, _, control_flow| {
         match event {
             Event::EventsCleared => {
@@ -265,15 +382,75 @@ fn main() -> Fallible<()> {
             } => {
                 // Redraw the application.
                 //
-                // It's preferrable to render in this event rather than in EventsCleared, since
+                // It's preferable to render in this event rather than in EventsCleared, since
                 // rendering in here allows the program to gracefully handle redraws requested
                 // by the OS.
+                let (instr_upload_buffer_r, const_upload_buffer_r) =
+                    tree.encode_upload_buffer(0, gpu.device());
+                let (instr_upload_buffer_g, const_upload_buffer_g) =
+                    tree.encode_upload_buffer(1, gpu.device());
+                let (instr_upload_buffer_b, const_upload_buffer_b) =
+                    tree.encode_upload_buffer(2, gpu.device());
                 let mut frame = gpu.begin_frame().unwrap();
+                frame.copy_buffer_to_buffer(
+                    &instr_upload_buffer_r,
+                    0,
+                    &compute_buffers[0].instr_buffer,
+                    0,
+                    InstructionEncoder::instruction_buffer_size(),
+                );
+                frame.copy_buffer_to_buffer(
+                    &const_upload_buffer_r,
+                    0,
+                    &compute_buffers[0].pool_buffer,
+                    0,
+                    InstructionEncoder::pool_buffer_size(),
+                );
+                frame.copy_buffer_to_buffer(
+                    &instr_upload_buffer_g,
+                    0,
+                    &compute_buffers[1].instr_buffer,
+                    0,
+                    InstructionEncoder::instruction_buffer_size(),
+                );
+                frame.copy_buffer_to_buffer(
+                    &const_upload_buffer_g,
+                    0,
+                    &compute_buffers[1].pool_buffer,
+                    0,
+                    InstructionEncoder::pool_buffer_size(),
+                );
+                frame.copy_buffer_to_buffer(
+                    &instr_upload_buffer_b,
+                    0,
+                    &compute_buffers[2].instr_buffer,
+                    0,
+                    InstructionEncoder::instruction_buffer_size(),
+                );
+                frame.copy_buffer_to_buffer(
+                    &const_upload_buffer_b,
+                    0,
+                    &compute_buffers[2].pool_buffer,
+                    0,
+                    InstructionEncoder::pool_buffer_size(),
+                );
                 {
                     let mut cpass = frame.begin_compute_pass();
                     cpass.set_pipeline(&uni_shader_pipeline);
-                    cpass.set_bind_group(0, &uni_shader_bind_group, &[]);
-                    cpass.dispatch(result_extent.width / 8, result_extent.height / 8, 1);
+                    cpass.set_bind_group(0, &compute_buffers[0].bind_group, &[]);
+                    cpass.dispatch(texture_extent.width / 8, texture_extent.height / 8, 1);
+                }
+                {
+                    let mut cpass = frame.begin_compute_pass();
+                    cpass.set_pipeline(&uni_shader_pipeline);
+                    cpass.set_bind_group(0, &compute_buffers[1].bind_group, &[]);
+                    cpass.dispatch(texture_extent.width / 8, texture_extent.height / 8, 1);
+                }
+                {
+                    let mut cpass = frame.begin_compute_pass();
+                    cpass.set_pipeline(&uni_shader_pipeline);
+                    cpass.set_bind_group(0, &compute_buffers[2].bind_group, &[]);
+                    cpass.dispatch(texture_extent.width / 8, texture_extent.height / 8, 1);
                 }
                 {
                     let mut rpass = frame.begin_render_pass();
@@ -283,6 +460,9 @@ fn main() -> Fallible<()> {
                     rpass.draw(0..4, 0..1);
                 }
                 frame.finish();
+
+                println!("frame time: {:?}", last_redraw.elapsed());
+                last_redraw = Instant::now();
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
