@@ -1,17 +1,17 @@
-// This file is part of Arctic.
+// This file is part of Stampede.
 //
-// Arctic is free software: you can redistribute it and/or modify
+// Stampede is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Arctic is distributed in the hope that it will be useful,
+// Stampede is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Arctic.  If not, see <http://www.gnu.org/licenses/>.
+// along with Stampede.  If not, see <http://www.gnu.org/licenses/>.
 mod tree;
 
 use crate::tree::{InstructionEncoder, CONSTANT_POOL_SIZE, Tree};
@@ -355,52 +355,7 @@ fn main() -> Fallible<()> {
     });
 
     let mut rng = thread_rng();
-    let tree = Tree::new(&mut rng);
-
-    /*
-    use crate::tree::{EllipseOp, Node};
-    let tree = Tree::with_layers(
-        Node::Ellipse(EllipseOp::with_constants(-0.5, -0.25, 0.5, 0.25, 1.21, 10.0)),
-        Node::Ellipse(EllipseOp::with_constants(-0.5, -0.25, 0.5, 0.25, 1.21, 10.0)),
-        Node::Ellipse(EllipseOp::with_constants(-0.5, -0.25, 0.5, 0.25, 1.21, 10.0)),
-    );
-    */
-
-    /*
-    use crate::tree::{FlowerOp, Node};
-    let tree = Tree::with_layers(
-        Node::Flower(FlowerOp::with_constants(-0.5, -0.25, 0.5, 0.25, 0.2, 5.0, 10.0)),
-        Node::Flower(FlowerOp::with_constants(-0.5, -0.25, 0.5, 0.25, 0.2, 5.0, 10.0)),
-        Node::Flower(FlowerOp::with_constants(-0.5, -0.25, 0.5, 0.25, 0.2, 5.0, 10.0)),
-    );
-    */
-
-    /*
-    use crate::tree::{LinearGradientOp, Node};
-    let tree = Tree::with_layers(
-        Node::LinearGradient(LinearGradientOp::with_constants(-0.5, -0.25, 0.5, 0.25, 4.0)),
-        Node::LinearGradient(LinearGradientOp::with_constants(-0.5, -0.25, 0.5, 0.25, 4.0)),
-        Node::LinearGradient(LinearGradientOp::with_constants(-0.5, -0.25, 0.5, 0.25, 4.0)),
-    );
-    */
-
-    /*
-    use crate::tree::{RadialGradientOp, Node};
-    let tree = Tree::with_layers(
-        Node::RadialGradient(RadialGradientOp::with_constants(-0.5, -0.25, 0.75, 0.5, 0.5)),
-        Node::RadialGradient(RadialGradientOp::with_constants(-0.5, -0.25, 0.75, 0.5, 0.5)),
-        Node::RadialGradient(RadialGradientOp::with_constants(-0.5, -0.25, 0.75, 0.5, 0.5)),
-    );
-    */
-
-    /*
-    use crate::tree::{PolarThetaOp, Node};
-    let tree = Tree::with_layers(
-        Node::PolarTheta(PolarThetaOp::with_constants(-0.5, -0.25, 0.5)),
-        Node::PolarTheta(PolarThetaOp::with_constants(-0.5, -0.25, 0.5)),
-        Node::PolarTheta(PolarThetaOp::with_constants(-0.5, -0.25, 0.5)),
-    );
-    */
+    let mut tree = Tree::new(&mut rng);
     println!("tree: {}", tree.show());
 
     let mut last_redraw = Instant::now();
@@ -408,6 +363,7 @@ fn main() -> Fallible<()> {
         match event {
             Event::EventsCleared => {
                 // Application update code.
+                tree.animate();
 
                 // Queue a RedrawRequested event.
                 window.request_redraw();
