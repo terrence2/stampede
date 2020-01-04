@@ -14,7 +14,7 @@
 // along with Arctic.  If not, see <http://www.gnu.org/licenses/>.
 mod tree;
 
-use crate::tree::{InstructionEncoder, Tree, Node, AddOp};
+use crate::tree::{InstructionEncoder, CONSTANT_POOL_SIZE, Tree};
 use failure::Fallible;
 use gpu::GPU;
 use rand::prelude::*;
@@ -44,7 +44,6 @@ pub struct Configuration {
 struct ComputeLayer {
     instr_buffer: wgpu::Buffer,
     pool_buffer: wgpu::Buffer,
-    texture: wgpu::Texture,
     texture_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
 }
@@ -189,7 +188,6 @@ fn main() -> Fallible<()> {
             ComputeLayer {
                 instr_buffer,
                 pool_buffer,
-                texture,
                 texture_view,
                 bind_group,
             }
@@ -358,11 +356,49 @@ fn main() -> Fallible<()> {
 
     let mut rng = thread_rng();
     let tree = Tree::new(&mut rng);
+
     /*
+    use crate::tree::{EllipseOp, Node};
     let tree = Tree::with_layers(
-        Node::Add(AddOp::with_children(Node::Const(1f32), Node::Const(1f32))),
-        Node::Add(AddOp::with_children(Node::Const(0f32), Node::Const(0f32))),
-        Node::Add(AddOp::with_children(Node::Const(1f32), Node::Const(1f32))),
+        Node::Ellipse(EllipseOp::with_constants(-0.5, -0.25, 0.5, 0.25, 1.21, 10.0)),
+        Node::Ellipse(EllipseOp::with_constants(-0.5, -0.25, 0.5, 0.25, 1.21, 10.0)),
+        Node::Ellipse(EllipseOp::with_constants(-0.5, -0.25, 0.5, 0.25, 1.21, 10.0)),
+    );
+    */
+
+    /*
+    use crate::tree::{FlowerOp, Node};
+    let tree = Tree::with_layers(
+        Node::Flower(FlowerOp::with_constants(-0.5, -0.25, 0.5, 0.25, 0.2, 5.0, 10.0)),
+        Node::Flower(FlowerOp::with_constants(-0.5, -0.25, 0.5, 0.25, 0.2, 5.0, 10.0)),
+        Node::Flower(FlowerOp::with_constants(-0.5, -0.25, 0.5, 0.25, 0.2, 5.0, 10.0)),
+    );
+    */
+
+    /*
+    use crate::tree::{LinearGradientOp, Node};
+    let tree = Tree::with_layers(
+        Node::LinearGradient(LinearGradientOp::with_constants(-0.5, -0.25, 0.5, 0.25, 4.0)),
+        Node::LinearGradient(LinearGradientOp::with_constants(-0.5, -0.25, 0.5, 0.25, 4.0)),
+        Node::LinearGradient(LinearGradientOp::with_constants(-0.5, -0.25, 0.5, 0.25, 4.0)),
+    );
+    */
+
+    /*
+    use crate::tree::{RadialGradientOp, Node};
+    let tree = Tree::with_layers(
+        Node::RadialGradient(RadialGradientOp::with_constants(-0.5, -0.25, 0.75, 0.5, 0.5)),
+        Node::RadialGradient(RadialGradientOp::with_constants(-0.5, -0.25, 0.75, 0.5, 0.5)),
+        Node::RadialGradient(RadialGradientOp::with_constants(-0.5, -0.25, 0.75, 0.5, 0.5)),
+    );
+    */
+
+    /*
+    use crate::tree::{PolarThetaOp, Node};
+    let tree = Tree::with_layers(
+        Node::PolarTheta(PolarThetaOp::with_constants(-0.5, -0.25, 0.5)),
+        Node::PolarTheta(PolarThetaOp::with_constants(-0.5, -0.25, 0.5)),
+        Node::PolarTheta(PolarThetaOp::with_constants(-0.5, -0.25, 0.5)),
     );
     */
     println!("tree: {}", tree.show());

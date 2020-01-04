@@ -12,12 +12,12 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Arctic.  If not, see <http://www.gnu.org/licenses/>.
-use rand::prelude::*;
-use std::mem;
+use rand::{prelude::*, distributions::Uniform};
+use std::{f32::consts::PI, mem};
 use wgpu;
 
-const INSTRUCTION_COUNT: usize = 512;
-const CONSTANT_POOL_SIZE: usize = 1024;
+pub const INSTRUCTION_COUNT: usize = 128;
+pub const CONSTANT_POOL_SIZE: usize = 1024;
 
 pub struct InstructionEncoder {
     instrs: [u32; INSTRUCTION_COUNT],
@@ -45,58 +45,36 @@ impl InstructionEncoder {
         }
     }
 
-    pub fn finish(mut self) -> ([u32; INSTRUCTION_COUNT], [f32; CONSTANT_POOL_SIZE]) {
-        // Fill end with nops
-        while self.instr_offset % INSTRUCTION_COUNT != 0 {
-            self.push_2(0, None, None);
-        }
-
+    pub fn finish(self) -> ([u32; INSTRUCTION_COUNT], [f32; CONSTANT_POOL_SIZE]) {
         (self.instrs, self.constant_pool)
     }
 
-    fn encode_arg(a: Option<u16>) -> (u32, u32) {
-        if let Some(v) = a {
-            (1, v as u32)
-        } else {
-            (0, 0)
+    pub fn push<Op: Opcode>(&mut self, op: &Op) {
+        let children = op.get_children();
+        let consts = op.get_constants();
+        for child in children {
+            child.encode(self);
         }
+        for &v in consts {
+            self.push_constant(v);
+        }
+        let op_bits = ((consts.len() & 0xFF) as u32) << 16
+            | ((children.len() & 0xFF) as u32) << 8
+            | (Op::opcode() as u32);
+        self.instrs[self.instr_offset] = op_bits;
+        self.instr_offset += 1;
     }
 
-    pub fn push_1(&mut self, op: u8, arg0: Option<u16>) {
-        self.push_2(op, arg0, None);
-    }
-
-    // One word encoding. Identical first word to the encoding of the second word.
-    // Yes, we have to know the semantics of the opcode to know the number of words to decode.
-    // oooo_ooFF 0000_0000 0000_1111 1111_1111
-    pub fn push_2(&mut self, op: u8, arg0: Option<u16>, arg1: Option<u16>) {
-        assert_eq!(op & 0b1100_0000, 0);
-        let (a0f, a0) = Self::encode_arg(arg0);
-        let (a1f, a1) = Self::encode_arg(arg1);
-        let instr0 = (op as u32) << 26 |
-            a0f << 25 |
-            a1f << 24 |
-            (a0 & 0x0FFF) << 12 |
-            (a1 & 0x0FFF);
-        self.instrs[self.instr_offset] = instr0;
-    }
-
-    /*
-    // Encoding is 8 bits for the opcode, then 14 bits for each of 4 args.
-    // oooo_ooFF 1111_1111 1111_2222 2222_2222
-    // XXXXXXXFF 3333_3333 3333_4444 4444_4444
-    pub fn push_4(&mut self, op: u8, arg0: Option<u16>, arg1: Option<u16>, arg2: Option<u16>, arg3: Option<u16>) {
-        self.push_2(op, arg0, arg1);
-        self.push_2(0, arg2, arg3);
-    }
-    */
-
-    pub fn push_constant(&mut self, value: f32) -> u16 {
-        let out = self.pool_offset as u16;
+    pub fn push_constant(&mut self, value: f32) {
         self.constant_pool[self.pool_offset] = value;
         self.pool_offset += 1;
-        out
     }
+}
+
+pub trait Opcode {
+    fn opcode() -> usize;
+    fn get_constants(&self) -> &[f32];
+    fn get_children(&self) -> &[Box<Node>];
 }
 
 fn prefix(level: usize) -> String {
@@ -107,6 +85,7 @@ fn prefix(level: usize) -> String {
     s
 }
 
+/*
 #[derive(Copy, Clone)]
 struct State {
     count: usize,
@@ -118,59 +97,98 @@ impl State {
         self
     }
 }
+*/
 
-#[derive(Debug)]
-pub struct AddOp {
-    lhs: Box<Node>,
-    rhs: Box<Node>,
-}
+macro_rules! make_op {
+    ($op_name:ident [$opcode:literal] {
+        constants($const_count:literal) => [$($const_name:ident[$min_bound:expr,$max_bound:expr]),*],
+        children($child_count:literal) => [$($child_name:ident),*]
+    }) => {
+        #[derive(Debug)]
+        pub struct $op_name {
+            consts: [f32; $const_count],
+            children: [Box<Node>; $child_count]
+        }
 
-impl AddOp {
-    fn new(rng: &mut ThreadRng, count: &mut usize) -> Self {
-        Self {
-            lhs: Box::new(Node::new(rng, count)),
-            rhs: Box::new(Node::new(rng, count)),
+        impl $op_name {
+            pub fn new(rng: &mut ThreadRng, _count: &mut usize) -> Self {
+                Self {
+                    consts: [
+                        $(
+                            rng.gen_range(($min_bound) as f32, ($max_bound) as f32)
+                        ),*
+                    ],
+                    children: [
+                        $(
+                            Box::new(Node::new(rng, _count, stringify!($child_name)))
+                        ),*
+                    ],
+                }
+            }
+
+            #[allow(dead_code)]
+            pub fn with_constants($($const_name: f32),*) -> Self {
+                let _rng = &mut thread_rng();
+                let _count = &mut 0;
+                Self {
+                    consts: [
+                        $($const_name),*
+                    ],
+                    children: [
+                        $(
+                            Box::new(Node::new(_rng, _count, stringify!($child_name)))
+                        ),*
+                    ],
+                }
+            }
+
+            pub fn show(&self, level: usize) -> String {
+                let cc = self.consts.iter().map(|v| format!("{:0.2}", v)).collect::<Vec<String>>().join(", ");
+                if $child_count == 0 {
+                    format!("{}{}({})", prefix(level), stringify!($op_name), cc)
+                } else {
+                    let ch = self.children.iter().map(|c| c.show(level + 1)).collect::<Vec<String>>().join("\n");
+                    format!("{}{}({})-\n{}", prefix(level), stringify!($op_name), cc, ch)
+                }
+            }
+        }
+
+        impl Opcode for $op_name {
+            fn opcode() -> usize {
+                $opcode
+            }
+
+            fn get_constants(&self) -> &[f32] {
+                &self.consts
+            }
+
+            fn get_children(&self) -> &[Box<Node>] {
+                &self.children
+            }
         }
     }
-
-    pub fn with_children(lhs: Node, rhs: Node) -> Self {
-        Self {
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        }
-    }
-
-    fn show(&self, level: usize) -> String {
-        let p = prefix(level);
-        format!(
-            "{}Add-\n{}\n{}",
-            p,
-            self.lhs.show(level + 1),
-            self.rhs.show(level + 1)
-        )
-    }
-
-    fn encode(&self, opcode: u8, encoder: &mut InstructionEncoder) -> Option<u16> {
-        let c0 = self.lhs.encode(encoder);
-        let c1 = self.rhs.encode(encoder);
-        encoder.push_2(opcode, c0, c1);
-        None
-    }
-
 }
+
+make_op!(ConstOp          [1] { constants(1) => [ value[-1,1] ], children(0) => [] });
+make_op!(EllipseOp        [2] { constants(6) => [ f0x[-1,1], f0y[-1,1], f1x[-1,1], f1y[-1,1], size[0.1,1], sharp[1,100] ], children(0) => [] });
+make_op!(FlowerOp         [3] { constants(7) => [ center_x[-1,1], center_y[-1,1], angle[0,2.0*PI], size[0,2.5], ratio[0,1], n_points[3,25], sharpness[2,10] ], children(0) => [] });
+make_op!(LinearGradientOp [4] { constants(5) => [ p0x[-1,1], p0y[-1,1], p1x[-1,1], p1y[-1,1], sharp[2,20] ], children(0) => [] });
+make_op!(RadialGradientOp [5] { constants(5) => [ p0x[-1,1], p0y[-1,1], p1x[-1,1], p1y[-1,1], angle[0,2.0*PI] ], children(0) => [] });
+make_op!(PolarThetaOp     [6] { constants(3) => [ x[-1,1], y[-1,1], angle[0,2.0*PI] ], children(0) => [] });
+//
+//
+make_op!(AbsoluteOp       [8] { constants(0) => [], children(1) => [value] });
+make_op!(InvertOp         [9] { constants(0) => [], children(1) => [value] });
+make_op!(AddOp           [10] { constants(0) => [], children(2) => [lhs, rhs] });
+make_op!(SubtractOp      [11] { constants(0) => [], children(2) => [lhs, rhs] });
+make_op!(MultiplyOp      [12] { constants(0) => [], children(2) => [lhs, rhs] });
+make_op!(DivideOp        [13] { constants(0) => [], children(2) => [lhs, rhs] });
+make_op!(ModulusOp       [14] { constants(0) => [], children(2) => [lhs, rhs] });
+make_op!(ExponentOp      [15] { constants(0) => [], children(2) => [lhs, rhs] });
 
 /*
 pub enum OpNode {
-    // Unary
-    //    Absolute,
-    //    Invert,
-
     // Binary
-    //    Divide,
-    //    Exponentiate,
-    //    Modulus,
-    //    Multiply,
-    //
     //    // Trig
     //    Sinc,
     //    Sine,
@@ -178,11 +196,6 @@ pub enum OpNode {
     //    Squircle,
 }
 pub enum LeafNode {
-    Const(ConstOp),
-    //    Ellipse,
-    //    Flower,
-    //    LinearGradient,
-    //    RadialGradient,
     //    PolarTheta
 }
 */
@@ -190,43 +203,91 @@ pub enum LeafNode {
 #[derive(Debug)]
 pub enum Node {
     // Leaves
-    Const(f32),
+    Const(ConstOp),
+    Ellipse(EllipseOp),
+    Flower(FlowerOp),
+    LinearGradient(LinearGradientOp),
+    RadialGradient(RadialGradientOp),
+    PolarTheta(PolarThetaOp),
 
     // Operations
+    Absolute(AbsoluteOp),
+    Invert(InvertOp),
     Add(AddOp),
+    Subtract(SubtractOp),
+    Multiply(MultiplyOp),
+    Divide(DivideOp),
+    Modulus(ModulusOp),
+    Exponent(ExponentOp),
 }
 
 impl Node {
-    fn new(rng: &mut ThreadRng, count: &mut usize) -> Self {
+    fn new(rng: &mut ThreadRng, count: &mut usize, _link_name: &str) -> Self {
         // FIXME: pick a better walk for this
-        //let fullness = *count as f32 / INSTRUCTION_COUNT as f32;
-        let fullness = 1f32;
+        let fullness = (*count * 2) as f32 / INSTRUCTION_COUNT as f32;
         *count += 1;
         if rng.gen_range(0f32, 1f32) < fullness {
-            // Leaf distribution
-            println!("CAPPING: {}", fullness);
-            Self::Const(rng.gen_range(0f32, 1f32))
+            let x = rng.sample(Uniform::new(EllipseOp::opcode(), PolarThetaOp::opcode() + 1));
+            match x {
+                2 => Self::Ellipse(EllipseOp::new(rng, count)),
+                3 => Self::Flower(FlowerOp::new(rng, count)),
+                4 => Self::LinearGradient(LinearGradientOp::new(rng, count)),
+                5 => Self::RadialGradient(RadialGradientOp::new(rng, count)),
+                6 => Self::PolarTheta(PolarThetaOp::new(rng, count)),
+                _ => panic!("unknown const opcode")
+            }
         } else {
-            // Operation distribution
-            println!("EXPAND: {}", fullness);
-            Self::Add(AddOp::new(rng, count))
+            let x = rng.sample(Uniform::new(AbsoluteOp::opcode(), ExponentOp::opcode() + 1));
+            match x {
+                8 => Self::Absolute(AbsoluteOp::new(rng, count)),
+                9 => Self::Invert(InvertOp::new(rng, count)),
+                10 => Self::Add(AddOp::new(rng, count)),
+                11 => Self::Subtract(SubtractOp::new(rng, count)),
+                12 => Self::Multiply(MultiplyOp::new(rng, count)),
+                13 => Self::Divide(DivideOp::new(rng, count)),
+                14 => Self::Modulus(ModulusOp::new(rng, count)),
+                15 => Self::Exponent(ExponentOp::new(rng, count)),
+                _ => panic!("unknown opcode")
+            }
         }
     }
 
     fn show(&self, level: usize) -> String {
+        let l = level + 1;
         match self {
-            Self::Const(ref value) => format!("{:0.2}", value),
-            Self::Add(ref add_op) => add_op.show(level + 1),
+            Self::Const(ref op) => op.show(l),
+            Self::Ellipse(ref op) => op.show(l),
+            Self::Flower(ref op) => op.show(l),
+            Self::LinearGradient(ref op) => op.show(l),
+            Self::RadialGradient(ref op) => op.show(l),
+            Self::PolarTheta(ref op) => op.show(l),
+            Self::Absolute(ref op) => op.show(l),
+            Self::Invert(ref op) => op.show(l),
+            Self::Add(ref op) => op.show(l),
+            Self::Subtract(ref op) => op.show(l),
+            Self::Multiply(ref op) => op.show(l),
+            Self::Divide(ref op) => op.show(l),
+            Self::Modulus(ref op) => op.show(l),
+            Self::Exponent(ref op) => op.show(l),
         }
     }
 
-    fn encode(&self, encoder: &mut InstructionEncoder) -> Option<u16> {
+    fn encode(&self, encoder: &mut InstructionEncoder) {
         match self {
-            Self::Const(ref value) => Some(encoder.push_constant(*value)),
-            Self::Add(ref add_op) => {
-                add_op.encode(0x12, encoder);
-                None
-            }
+            Self::Const(ref op) => encoder.push(op),
+            Self::Ellipse(ref op) => encoder.push(op),
+            Self::Flower(ref op) => encoder.push(op),
+            Self::LinearGradient(ref op) => encoder.push(op),
+            Self::RadialGradient(ref op) => encoder.push(op),
+            Self::PolarTheta(ref op) => encoder.push(op),
+            Self::Absolute(ref op) => encoder.push(op),
+            Self::Invert(ref op) => encoder.push(op),
+            Self::Add(ref op) => encoder.push(op),
+            Self::Subtract(ref op) => encoder.push(op),
+            Self::Multiply(ref op) => encoder.push(op),
+            Self::Divide(ref op) => encoder.push(op),
+            Self::Modulus(ref op) => encoder.push(op),
+            Self::Exponent(ref op) => encoder.push(op),
         }
     }
 }
@@ -240,17 +301,15 @@ impl Tree {
     pub fn new(rng: &mut ThreadRng) -> Self {
         Self {
             layers: [
-                Node::new(rng, &mut 0),
-                Node::new(rng, &mut 0),
-                Node::new(rng, &mut 0),
+                Node::new(rng, &mut 0, "r"),
+                Node::new(rng, &mut 0, "g"),
+                Node::new(rng, &mut 0, "b"),
             ],
         }
     }
 
     pub fn with_layers(r: Node, g: Node, b: Node) -> Self {
-        Self {
-            layers: [r, g, b]
-        }
+        Self { layers: [r, g, b] }
     }
 
     pub fn show(&self) -> String {
@@ -268,19 +327,20 @@ impl Tree {
         device: &wgpu::Device,
     ) -> (wgpu::Buffer, wgpu::Buffer) {
         let mut encoder = InstructionEncoder::new();
-        if let Some(const_ref) = self.layers[offset].encode(&mut encoder) {
-            encoder.push_1(1, Some(const_ref));
-        }
+        self.layers[offset].encode(&mut encoder);
         let (instrs, consts) = encoder.finish();
-//        println!("instrs: {:X}, {}", instrs[0], instrs[1]);
-//        println!("consts: {}, {}", consts[0], consts[1]);
+//        println!(
+//            "instrs: {:06X}, {:06X}, {:06X}",
+//            instrs[0], instrs[1], instrs[2]
+//        );
+//        println!("consts: {:?}", &consts[..10]);
 
         let instr_buffer = device
             .create_buffer_mapped(instrs.len(), wgpu::BufferUsage::COPY_SRC)
             .fill_from_slice(&instrs);
 
         let const_buffer = device
-            .create_buffer_mapped(consts.len(), wgpu::BufferUsage::COPY_SRC)
+            .create_buffer_mapped(consts.len(), wgpu::BufferUsage::all())
             .fill_from_slice(&consts);
 
         (instr_buffer, const_buffer)
