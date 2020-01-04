@@ -18,7 +18,7 @@ use crate::tree::{InstructionEncoder, CONSTANT_POOL_SIZE, Tree};
 use failure::Fallible;
 use gpu::GPU;
 use rand::prelude::*;
-use std::{mem, time::Instant};
+use std::{mem, time::{Duration, Instant}};
 use wgpu;
 use winit::{
     event::{Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -49,6 +49,7 @@ struct ComputeLayer {
 }
 
 fn main() -> Fallible<()> {
+    let program_start = Instant::now();
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop)?;
     let mut gpu = GPU::new(&window, Default::default())?;
@@ -453,7 +454,10 @@ fn main() -> Fallible<()> {
                 }
                 frame.finish();
 
-                println!("frame time: {:?}", last_redraw.elapsed());
+                let frame_time = last_redraw.elapsed();
+                if frame_time >= Duration::from_millis(17) {
+                    println!("@{:?}: frame time: {:?}", program_start.elapsed(), frame_time);
+                }
                 last_redraw = Instant::now();
             }
             Event::WindowEvent {
