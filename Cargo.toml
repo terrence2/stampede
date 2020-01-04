@@ -1,6 +1,6 @@
 [package]
-name = "artic"
-description = "create art at 60 fps"
+name = "stampede"
+description = "It's just art."
 version = "0.1.0"
 authors = ["Terrence Cole <terrence.d.cole@gmail.com>"]
 edition = "2018"
