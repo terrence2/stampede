@@ -1,17 +1,17 @@
-// This file is part of Arctic.
+// This file is part of Stampede.
 //
-// Arctic is free software: you can redistribute it and/or modify
+// Stampede is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Arctic is distributed in the hope that it will be useful,
+// Stampede is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Arctic.  If not, see <http://www.gnu.org/licenses/>.
+// along with Stampede.  If not, see <http://www.gnu.org/licenses/>.
 use rand::{prelude::*, distributions::Uniform};
 use std::{f32::consts::PI, mem};
 use wgpu;
@@ -55,8 +55,8 @@ impl InstructionEncoder {
         for child in children {
             child.encode(self);
         }
-        for &v in consts {
-            self.push_constant(v);
+        for v in consts {
+            self.push_constant(v.value());
         }
         let op_bits = ((consts.len() & 0xFF) as u32) << 16
             | ((children.len() & 0xFF) as u32) << 8
@@ -73,7 +73,7 @@ impl InstructionEncoder {
 
 pub trait Opcode {
     fn opcode() -> usize;
-    fn get_constants(&self) -> &[f32];
+    fn get_constants(&self) -> &[Constant];
     fn get_children(&self) -> &[Box<Node>];
 }
 
@@ -85,28 +85,77 @@ fn prefix(level: usize) -> String {
     s
 }
 
-/*
-#[derive(Copy, Clone)]
-struct State {
-    count: usize,
+#[derive(Debug, Eq, PartialEq)]
+pub enum WrapMode {
+    Repeat,
+    Mirror,
 }
 
-impl State {
-    fn descend(mut self) -> Self {
-        self.count += 1;
-        self
+impl WrapMode {
+    pub fn from_name(name: &'static str) -> Self {
+        match name {
+            "m" => Self::Mirror,
+            "r" => Self::Repeat,
+            _ => panic!("Unknown wrap mode name")
+        }
     }
 }
-*/
+
+pub const RATE_SCALE: f32 = 500f32;
+
+#[derive(Debug)]
+pub struct Constant {
+    limits: [f32; 2],
+    value: f32,
+    rate: f32,
+    wrap_mode: WrapMode,
+}
+
+impl Constant {
+    pub fn new(rng: &mut ThreadRng, min_bound: f32, max_bound: f32, wrap_mode_name: &'static str) -> Self {
+        Self {
+            limits: [min_bound, max_bound],
+            value: rng.gen_range(min_bound, max_bound),
+            rate: rng.gen_range(min_bound / RATE_SCALE, max_bound / RATE_SCALE),
+            wrap_mode: WrapMode::from_name(wrap_mode_name),
+        }
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    pub fn animate(&mut self) {
+        self.value += self.rate;
+        if self.value < self.limits[0] {
+            match self.wrap_mode {
+                WrapMode::Repeat => self.value += (self.limits[1] - self.limits[0]),
+                WrapMode::Mirror => {
+                    self.value = self.limits[0] + (self.limits[0] - self.value);
+                    self.rate *= -1f32;
+                }
+            }
+        }
+        if self.value > self.limits[1] {
+            match self.wrap_mode {
+                WrapMode::Repeat => self.value -= (self.limits[1] - self.limits[0]),
+                WrapMode::Mirror => {
+                    self.value = self.limits[1] - (self.value - self.limits[1]);
+                    self.rate *= -1f32;
+                }
+            }
+        }
+    }
+}
 
 macro_rules! make_op {
     ($op_name:ident [$opcode:literal] {
-        constants($const_count:literal) => [$($const_name:ident[$min_bound:expr,$max_bound:expr]),*],
+        constants($const_count:literal) => [$($const_name:ident[$min_bound:expr,$max_bound:expr,$wrap_mode:ident]),*],
         children($child_count:literal) => [$($child_name:ident),*]
     }) => {
         #[derive(Debug)]
         pub struct $op_name {
-            consts: [f32; $const_count],
+            consts: [Constant; $const_count],
             children: [Box<Node>; $child_count]
         }
 
@@ -115,7 +164,8 @@ macro_rules! make_op {
                 Self {
                     consts: [
                         $(
-                            rng.gen_range(($min_bound) as f32, ($max_bound) as f32)
+                            Constant::new(rng, ($min_bound) as f32, ($max_bound) as f32, stringify!($wrap_mode))
+                            //rng.gen_range(($min_bound) as f32, ($max_bound) as f32)
                         ),*
                     ],
                     children: [
@@ -126,13 +176,22 @@ macro_rules! make_op {
                 }
             }
 
+            pub fn animate(&mut self) {
+                for child in self.children.iter_mut() {
+                    child.animate();
+                }
+                for c in self.consts.iter_mut() {
+                    c.animate();
+                }
+            }
+            /*
             #[allow(dead_code)]
             pub fn with_constants($($const_name: f32),*) -> Self {
                 let _rng = &mut thread_rng();
                 let _count = &mut 0;
                 Self {
                     consts: [
-                        $($const_name),*
+                        Constant::new(_rng, -1f32, 1f32, "m"),
                     ],
                     children: [
                         $(
@@ -141,9 +200,10 @@ macro_rules! make_op {
                     ],
                 }
             }
+            */
 
             pub fn show(&self, level: usize) -> String {
-                let cc = self.consts.iter().map(|v| format!("{:0.2}", v)).collect::<Vec<String>>().join(", ");
+                let cc = self.consts.iter().map(|v| format!("{:0.2}", v.value())).collect::<Vec<String>>().join(", ");
                 if $child_count == 0 {
                     format!("{}{}({})", prefix(level), stringify!($op_name), cc)
                 } else {
@@ -158,7 +218,7 @@ macro_rules! make_op {
                 $opcode
             }
 
-            fn get_constants(&self) -> &[f32] {
+            fn get_constants(&self) -> &[Constant] {
                 &self.consts
             }
 
@@ -169,13 +229,12 @@ macro_rules! make_op {
     }
 }
 
-make_op!(ConstOp          [1] { constants(1) => [ value[-1,1] ], children(0) => [] });
-make_op!(EllipseOp        [2] { constants(6) => [ f0x[-1,1], f0y[-1,1], f1x[-1,1], f1y[-1,1], size[0.1,1], sharp[1,100] ], children(0) => [] });
-make_op!(FlowerOp         [3] { constants(7) => [ center_x[-1,1], center_y[-1,1], angle[0,2.0*PI], size[0,2.5], ratio[0,1], n_points[3,25], sharpness[2,10] ], children(0) => [] });
-make_op!(LinearGradientOp [4] { constants(5) => [ p0x[-1,1], p0y[-1,1], p1x[-1,1], p1y[-1,1], sharp[2,20] ], children(0) => [] });
-make_op!(RadialGradientOp [5] { constants(5) => [ p0x[-1,1], p0y[-1,1], p1x[-1,1], p1y[-1,1], angle[0,2.0*PI] ], children(0) => [] });
-make_op!(PolarThetaOp     [6] { constants(3) => [ x[-1,1], y[-1,1], angle[0,2.0*PI] ], children(0) => [] });
-//
+make_op!(ConstOp          [1] { constants(1) => [value[-1,1,m]], children(0) => [] });
+make_op!(EllipseOp        [2] { constants(6) => [p0x[-1,1,m], p0y[-1,1,m], p1x[-1,1,m], p1y[-1,1,m], size[0.1,1,m], sharp[1,100,m]], children(0) => [] });
+make_op!(FlowerOp         [3] { constants(7) => [x[-1,1,m], y[-1,1,m], angle[0,2.0*PI,r], size[0,2.5,m], ratio[0,1,m], n_points[3,25,m], sharpness[2,10,m]], children(0) => [] });
+make_op!(LinearGradientOp [4] { constants(5) => [p0x[-1,1,m], p0y[-1,1,m], p1x[-1,1,m], p1y[-1,1,m], sharp[2,20,m]], children(0) => [] });
+make_op!(RadialGradientOp [5] { constants(5) => [p0x[-1,1,m], p0y[-1,1,m], p1x[-1,1,m], p1y[-1,1,m], angle[0,2.0*PI,r]], children(0) => [] });
+make_op!(PolarThetaOp     [6] { constants(3) => [x[-1,1,m], y[-1,1,m], angle[0,2.0*PI,r]], children(0) => [] });
 //
 make_op!(AbsoluteOp       [8] { constants(0) => [], children(1) => [value] });
 make_op!(InvertOp         [9] { constants(0) => [], children(1) => [value] });
@@ -185,20 +244,10 @@ make_op!(MultiplyOp      [12] { constants(0) => [], children(2) => [lhs, rhs] })
 make_op!(DivideOp        [13] { constants(0) => [], children(2) => [lhs, rhs] });
 make_op!(ModulusOp       [14] { constants(0) => [], children(2) => [lhs, rhs] });
 make_op!(ExponentOp      [15] { constants(0) => [], children(2) => [lhs, rhs] });
-
-/*
-pub enum OpNode {
-    // Binary
-    //    // Trig
-    //    Sinc,
-    //    Sine,
-    //    Spiral,
-    //    Squircle,
-}
-pub enum LeafNode {
-    //    PolarTheta
-}
-*/
+make_op!(SincOp          [16] { constants(2) => [freq[-PI,PI,r], phase[-PI,PI,r]], children(1) => [input] });
+make_op!(SineOp          [17] { constants(2) => [freq[-PI,PI,r], phase[-PI,PI,r]], children(1) => [input] });
+make_op!(SpiralOp        [18] { constants(4) => [x[-1,1,m], y[-1,1,m], n[0,10,m], b[-1,1,m]], children(1) => [V] });
+make_op!(SquircleOp      [19] { constants(4) => [x[-1,1,m], y[-1,1,m], r[0,2,m], n[0,4,m]], children(2) => [a, b] });
 
 #[derive(Debug)]
 pub enum Node {
@@ -219,6 +268,10 @@ pub enum Node {
     Divide(DivideOp),
     Modulus(ModulusOp),
     Exponent(ExponentOp),
+    Sinc(SincOp),
+    Sine(SineOp),
+    Spiral(SpiralOp),
+    Squircle(SquircleOp),
 }
 
 impl Node {
@@ -237,7 +290,7 @@ impl Node {
                 _ => panic!("unknown const opcode")
             }
         } else {
-            let x = rng.sample(Uniform::new(AbsoluteOp::opcode(), ExponentOp::opcode() + 1));
+            let x = rng.sample(Uniform::new(AbsoluteOp::opcode(), SquircleOp::opcode() + 1));
             match x {
                 8 => Self::Absolute(AbsoluteOp::new(rng, count)),
                 9 => Self::Invert(InvertOp::new(rng, count)),
@@ -247,6 +300,10 @@ impl Node {
                 13 => Self::Divide(DivideOp::new(rng, count)),
                 14 => Self::Modulus(ModulusOp::new(rng, count)),
                 15 => Self::Exponent(ExponentOp::new(rng, count)),
+                16 => Self::Sinc(SincOp::new(rng, count)),
+                17 => Self::Sine(SineOp::new(rng, count)),
+                18 => Self::Spiral(SpiralOp::new(rng, count)),
+                19 => Self::Squircle(SquircleOp::new(rng, count)),
                 _ => panic!("unknown opcode")
             }
         }
@@ -269,6 +326,10 @@ impl Node {
             Self::Divide(ref op) => op.show(l),
             Self::Modulus(ref op) => op.show(l),
             Self::Exponent(ref op) => op.show(l),
+            Self::Sinc(ref op) => op.show(l),
+            Self::Sine(ref op) => op.show(l),
+            Self::Spiral(ref op) => op.show(l),
+            Self::Squircle(ref op) => op.show(l),
         }
     }
 
@@ -288,6 +349,33 @@ impl Node {
             Self::Divide(ref op) => encoder.push(op),
             Self::Modulus(ref op) => encoder.push(op),
             Self::Exponent(ref op) => encoder.push(op),
+            Self::Sinc(ref op) => encoder.push(op),
+            Self::Sine(ref op) => encoder.push(op),
+            Self::Spiral(ref op) => encoder.push(op),
+            Self::Squircle(ref op) => encoder.push(op),
+        }
+    }
+
+    fn animate(&mut self) {
+        match self {
+            Self::Const(ref mut op) => op.animate(),
+            Self::Ellipse(ref mut op) => op.animate(),
+            Self::Flower(ref mut op) => op.animate(),
+            Self::LinearGradient(ref mut op) => op.animate(),
+            Self::RadialGradient(ref mut op) => op.animate(),
+            Self::PolarTheta(ref mut op) => op.animate(),
+            Self::Absolute(ref mut op) => op.animate(),
+            Self::Invert(ref mut op) => op.animate(),
+            Self::Add(ref mut op) => op.animate(),
+            Self::Subtract(ref mut op) => op.animate(),
+            Self::Multiply(ref mut op) => op.animate(),
+            Self::Divide(ref mut op) => op.animate(),
+            Self::Modulus(ref mut op) => op.animate(),
+            Self::Exponent(ref mut op) => op.animate(),
+            Self::Sinc(ref mut op) => op.animate(),
+            Self::Sine(ref mut op) => op.animate(),
+            Self::Spiral(ref mut op) => op.animate(),
+            Self::Squircle(ref mut op) => op.animate(),
         }
     }
 }
@@ -319,6 +407,12 @@ impl Tree {
             self.layers[1].show(0),
             self.layers[2].show(0)
         )
+    }
+
+    pub fn animate(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.animate();
+        }
     }
 
     pub fn encode_upload_buffer(

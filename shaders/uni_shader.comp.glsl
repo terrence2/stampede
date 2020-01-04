@@ -1,17 +1,17 @@
-// This file is part of Arctic.
+// This file is part of Stampede.
 //
-// Arctic is free software: you can redistribute it and/or modify
+// Stampede is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// Arctic is distributed in the hope that it will be useful,
+// Stampede is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with Arctic.  If not, see <http://www.gnu.org/licenses/>.
+// along with Stampede.  If not, see <http://www.gnu.org/licenses/>.
 #version 450
 #define PI 3.141592653589793
 
@@ -41,7 +41,7 @@ float pop_const(inout uint position) {
 
 float interpret(vec2 position)
 {
-    float stack[INSTRUCTION_COUNT];
+    float stack[INSTRUCTION_COUNT * 2];
     uint stack_offset = 0;
     uint coff = 0;
     float size;
@@ -150,6 +150,47 @@ float interpret(vec2 position)
             break;
         case 15: // exponentiate
             stack[stack_offset - 2] = pow(stack[stack_offset - 2], stack[stack_offset - 1]);
+            break;
+        case 16: // sinc
+            {
+                float freq = pop_const(coff);
+                float phase = pop_const(coff);
+                float denom = stack[stack_offset - 1] * freq + phase;
+                stack[stack_offset - 1] = clamp(sin(denom) / denom, -1, 1);
+            }
+            break;
+        case 17: // sine
+            {
+                float freq = pop_const(coff);
+                float phase = pop_const(coff);
+                stack[stack_offset - 1] = sin(stack[stack_offset - 1] * freq + phase);
+            }
+            break;
+        case 18: // spiral
+            {
+                vec2 center = vec2(pop_const(coff), pop_const(coff));
+                float n = pop_const(coff);
+                float b = pop_const(coff);
+                vec2 v0 = position - center;
+
+                float r = (v0.x * v0.x + v0.y * v0.y) * 2 / sqrt(2) - 1;
+                float theta = atan(v0.y, v0.x) / PI;
+                float tmp = abs(abs(stack[stack_offset - 1]) - 0.5);
+                stack[stack_offset - 1] = 4 * tmp - 1;
+            }
+            break;
+        case 19: // squircle
+            {
+                vec2 x0 = vec2(pop_const(coff), pop_const(coff));
+                float r = pop_const(coff);
+                float n = pop_const(coff);
+                vec2 v0 = position - x0;
+                float a = abs(v0.x - stack[stack_offset - 2]);
+                float b = abs(v0.y - stack[stack_offset - 1]);
+                float numer = -(pow(a, n) + pow(b, n));
+                float denom = pow(r, n);
+                stack[stack_offset - 2] = clamp(numer / denom, -1, 1);
+            }
             break;
         default:
             continue;
