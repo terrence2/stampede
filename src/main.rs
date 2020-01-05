@@ -44,7 +44,7 @@ struct Opt {
     #[structopt(short, long, help = "Specify a seed")]
     seed: Option<String>,
 
-    #[structopt(short, long, default_value = "1080p", help = "Set draw dimension")]
+    #[structopt(short, long, default_value = "1080p", help = "Set draw dimension [1080p*,720p,280p,144p]")]
     dimensions: String,
 }
 
