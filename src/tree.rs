@@ -12,7 +12,8 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with Stampede.  If not, see <http://www.gnu.org/licenses/>.
-use rand::{prelude::*, distributions::Uniform};
+use lazy_static::lazy_static;
+use rand::prelude::*;
 use std::{f32::consts::PI, mem};
 use wgpu;
 
@@ -96,7 +97,8 @@ impl WrapMode {
         match name {
             "m" => Self::Mirror,
             "r" => Self::Repeat,
-            _ => panic!("Unknown wrap mode name")
+            "f" => Self::Repeat, // "fixed" does not wrap, so we can pick anything
+            _ => panic!("Unknown wrap mode name"),
         }
     }
 }
@@ -112,12 +114,17 @@ pub struct Constant {
 }
 
 impl Constant {
-    pub fn new(rng: &mut ThreadRng, min_bound: f32, max_bound: f32, wrap_mode_name: &'static str) -> Self {
+    pub fn new(rng: &mut StdRng, min_bound: f32, max_bound: f32, mode_name: &'static str) -> Self {
+        let rate = if mode_name != "f" {
+            rng.gen_range(min_bound / RATE_SCALE, max_bound / RATE_SCALE)
+        } else {
+            0f32
+        };
         Self {
             limits: [min_bound, max_bound],
             value: rng.gen_range(min_bound, max_bound),
-            rate: rng.gen_range(min_bound / RATE_SCALE, max_bound / RATE_SCALE),
-            wrap_mode: WrapMode::from_name(wrap_mode_name),
+            rate,
+            wrap_mode: WrapMode::from_name(mode_name),
         }
     }
 
@@ -160,7 +167,7 @@ macro_rules! make_op {
         }
 
         impl $op_name {
-            pub fn new(rng: &mut ThreadRng, _count: &mut usize) -> Self {
+            pub fn new(rng: &mut StdRng, _count: &mut usize) -> Self {
                 Self {
                     consts: [
                         $(
@@ -230,11 +237,11 @@ macro_rules! make_op {
 }
 
 make_op!(ConstOp          [1] { constants(1) => [value[-1,1,m]], children(0) => [] });
-make_op!(EllipseOp        [2] { constants(6) => [p0x[-1,1,m], p0y[-1,1,m], p1x[-1,1,m], p1y[-1,1,m], size[0.1,1,m], sharp[1,100,m]], children(0) => [] });
-make_op!(FlowerOp         [3] { constants(7) => [x[-1,1,m], y[-1,1,m], angle[0,2.0*PI,r], size[0,2.5,m], ratio[0,1,m], n_points[3,25,m], sharpness[2,10,m]], children(0) => [] });
-make_op!(LinearGradientOp [4] { constants(5) => [p0x[-1,1,m], p0y[-1,1,m], p1x[-1,1,m], p1y[-1,1,m], sharp[2,20,m]], children(0) => [] });
-make_op!(RadialGradientOp [5] { constants(5) => [p0x[-1,1,m], p0y[-1,1,m], p1x[-1,1,m], p1y[-1,1,m], angle[0,2.0*PI,r]], children(0) => [] });
-make_op!(PolarThetaOp     [6] { constants(3) => [x[-1,1,m], y[-1,1,m], angle[0,2.0*PI,r]], children(0) => [] });
+make_op!(EllipseOp        [2] { constants(6) => [p0x[-1,1,m], p0y[-0.8,0.8,m], p1x[-1,1,m], p1y[-0.8,0.8,m], size[0.1,1,m], sharp[1,100,m]], children(0) => [] });
+make_op!(FlowerOp         [3] { constants(7) => [x[-1,1,m], y[-0.8,0.8,m], angle[0,2.0*PI,r], size[0,2.5,m], ratio[0,1,m], n_points[3,25,f], sharpness[2,10,m]], children(0) => [] });
+make_op!(LinearGradientOp [4] { constants(5) => [p0x[-1,1,m], p0y[-0.8,0.8,m], p1x[-1,1,m], p1y[-0.8,0.8,m], sharp[2,20,m]], children(0) => [] });
+make_op!(RadialGradientOp [5] { constants(5) => [p0x[-1,1,m], p0y[-0.8,0.8,m], p1x[-1,1,m], p1y[-0.8,0.8,m], angle[0,2.0*PI,r]], children(0) => [] });
+make_op!(PolarThetaOp     [6] { constants(3) => [x[-1,1,m], y[-0.8,0.8,m], angle[0,2.0*PI,r]], children(0) => [] });
 //
 make_op!(AbsoluteOp       [8] { constants(0) => [], children(1) => [value] });
 make_op!(InvertOp         [9] { constants(0) => [], children(1) => [value] });
@@ -246,8 +253,8 @@ make_op!(ModulusOp       [14] { constants(0) => [], children(2) => [lhs, rhs] })
 make_op!(ExponentOp      [15] { constants(0) => [], children(2) => [lhs, rhs] });
 make_op!(SincOp          [16] { constants(2) => [freq[-PI,PI,r], phase[-PI,PI,r]], children(1) => [input] });
 make_op!(SineOp          [17] { constants(2) => [freq[-PI,PI,r], phase[-PI,PI,r]], children(1) => [input] });
-make_op!(SpiralOp        [18] { constants(4) => [x[-1,1,m], y[-1,1,m], n[0,10,m], b[-1,1,m]], children(1) => [V] });
-make_op!(SquircleOp      [19] { constants(4) => [x[-1,1,m], y[-1,1,m], r[0,2,m], n[0,4,m]], children(2) => [a, b] });
+make_op!(SpiralOp        [18] { constants(4) => [x[-1,1,m], y[-0.8,0.8,m], n[0,10,m], b[-1,1,m]], children(1) => [V] });
+make_op!(SquircleOp      [19] { constants(4) => [x[-1,1,m], y[-0.8,0.8,m], r[0,2,m], n[0,4,m]], children(2) => [a, b] });
 
 #[derive(Debug)]
 pub enum Node {
@@ -274,23 +281,78 @@ pub enum Node {
     Squircle(SquircleOp),
 }
 
+lazy_static! {
+    static ref LEAF_RATE_TOTAL: f32 = {
+        let mut total = 0.0;
+        for (rate, _, _) in &LEAF_RATES {
+            total += rate;
+        }
+        total
+    };
+    static ref OP_RATE_TOTAL: f32 = {
+        let mut total = 0.0;
+        for (rate, _, _) in &OP_RATES {
+            total += rate;
+        }
+        total
+    };
+}
+
+const LEAF_RATES: [(f32, usize, &'static str); 6] = [
+    (0.01, 1, "const"),
+    (2.00, 2, "ellipse"),
+    (4.00, 3, "flower"),
+    (1.00, 4, "linear gradient"),
+    (2.00, 5, "radial gradient"),
+    (2.00, 6, "polar theta"),
+];
+
+const OP_RATES: [(f32, usize, &'static str); 12] = [
+    (0.2, 8, "absolute"),
+    (0.1, 9, "invert"),
+    (0.3, 10, "add"),
+    (0.3, 11, "subtract"),
+    (0.3, 12, "multiply"),
+    (0.3, 13, "divide"),
+    (0.5, 14, "modulus"),
+    (0.5, 15, "exponentiate"),
+    (0.0, 16, "sinc"),
+    (0.0, 17, "sine"),
+    (0.2, 18, "spiral"),
+    (2.0, 19, "squircle"),
+];
+
+fn guided_random_walk(rng: &mut StdRng, rates: &[(f32, usize, &'static str)], total: f32) -> usize {
+    let f = rng.gen_range(0f32, total);
+    let mut i = 0;
+    let mut acc = 0f32;
+    while acc <= f {
+        // Note that the interval is half open, so this will always be true.
+        acc += rates[i].0;
+        i += 1;
+    }
+    i -= 1; // Hence we can subtract safely here.
+    rates[i].1
+}
+
 impl Node {
-    fn new(rng: &mut ThreadRng, count: &mut usize, _link_name: &str) -> Self {
+    fn new(rng: &mut StdRng, count: &mut usize, _link_name: &str) -> Self {
         // FIXME: pick a better walk for this
         let fullness = (*count * 2) as f32 / INSTRUCTION_COUNT as f32;
         *count += 1;
         if rng.gen_range(0f32, 1f32) < fullness {
-            let x = rng.sample(Uniform::new(EllipseOp::opcode(), PolarThetaOp::opcode() + 1));
+            let x = guided_random_walk(rng, &LEAF_RATES, *LEAF_RATE_TOTAL);
             match x {
+                1 => Self::Const(ConstOp::new(rng, count)),
                 2 => Self::Ellipse(EllipseOp::new(rng, count)),
                 3 => Self::Flower(FlowerOp::new(rng, count)),
                 4 => Self::LinearGradient(LinearGradientOp::new(rng, count)),
                 5 => Self::RadialGradient(RadialGradientOp::new(rng, count)),
                 6 => Self::PolarTheta(PolarThetaOp::new(rng, count)),
-                _ => panic!("unknown const opcode")
+                _ => panic!("unknown const opcode"),
             }
         } else {
-            let x = rng.sample(Uniform::new(AbsoluteOp::opcode(), SquircleOp::opcode() + 1));
+            let x = guided_random_walk(rng, &OP_RATES, *OP_RATE_TOTAL);
             match x {
                 8 => Self::Absolute(AbsoluteOp::new(rng, count)),
                 9 => Self::Invert(InvertOp::new(rng, count)),
@@ -304,7 +366,7 @@ impl Node {
                 17 => Self::Sine(SineOp::new(rng, count)),
                 18 => Self::Spiral(SpiralOp::new(rng, count)),
                 19 => Self::Squircle(SquircleOp::new(rng, count)),
-                _ => panic!("unknown opcode")
+                _ => panic!("unknown opcode"),
             }
         }
     }
@@ -386,7 +448,7 @@ pub struct Tree {
 }
 
 impl Tree {
-    pub fn new(rng: &mut ThreadRng) -> Self {
+    pub fn new(rng: &mut StdRng) -> Self {
         Self {
             layers: [
                 Node::new(rng, &mut 0, "r"),
@@ -422,12 +484,7 @@ impl Tree {
     ) -> (wgpu::Buffer, wgpu::Buffer) {
         let mut encoder = InstructionEncoder::new();
         self.layers[offset].encode(&mut encoder);
-        let (instrs, consts) = encoder.finish();
-//        println!(
-//            "instrs: {:06X}, {:06X}, {:06X}",
-//            instrs[0], instrs[1], instrs[2]
-//        );
-//        println!("consts: {:?}", &consts[..10]);
+        let (mut instrs, consts) = encoder.finish();
 
         let instr_buffer = device
             .create_buffer_mapped(instrs.len(), wgpu::BufferUsage::COPY_SRC)

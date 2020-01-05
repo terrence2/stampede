@@ -7,8 +7,11 @@ edition = "2018"
 
 [dependencies]
 failure = "^ 0.1.2"
+lazy_static = "^ 1"
 rand = "^ 0.7"
 raw-window-handle = "0.1"
+sha3 = "^ 0.8"
+structopt = "^ 0.3"
 wgpu = "0.4"
 winit = "0.20.0-alpha5"
 zerocopy = "^ 0.2"

@@ -59,6 +59,5 @@ void main() {
     float l = 100 * texture(sampler2D(r_texture, r_sampler), v_tex_coord).r;
     float a = (255 * texture(sampler2D(g_texture, g_sampler), v_tex_coord).r) - 128;
     float b = (255 * texture(sampler2D(b_texture, b_sampler), v_tex_coord).r) - 128;
-
     f_color = vec4(lab2rgb(vec3(l, a, b)), 1);
 }
