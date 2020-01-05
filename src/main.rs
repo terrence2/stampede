@@ -14,11 +14,16 @@
 // along with Stampede.  If not, see <http://www.gnu.org/licenses/>.
 mod tree;
 
-use crate::tree::{InstructionEncoder, CONSTANT_POOL_SIZE, Tree};
+use crate::tree::{InstructionEncoder, Tree, CONSTANT_POOL_SIZE};
 use failure::Fallible;
 use gpu::GPU;
 use rand::prelude::*;
-use std::{mem, time::Instant};
+use sha3::{Digest, Sha3_256};
+use std::{
+    mem,
+    time::{Duration, Instant},
+};
+use structopt::StructOpt;
 use wgpu;
 use winit::{
     event::{Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -26,6 +31,22 @@ use winit::{
     window::WindowBuilder,
 };
 use zerocopy::{AsBytes, FromBytes};
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "stampede", about = "Just some artwork")]
+struct Opt {
+    #[structopt(long, help = "Show the generated tree")]
+    show_tree: bool,
+
+    #[structopt(long, help = "Show any frames slower than 60fps")]
+    show_long_frames: bool,
+
+    #[structopt(short, long, help = "Specify a seed")]
+    seed: Option<String>,
+
+    #[structopt(short, long, default_value = "1080p", help = "Set draw dimension")]
+    dimensions: String,
+}
 
 #[repr(C)]
 #[derive(AsBytes, FromBytes, Copy, Clone, Debug, Default)]
@@ -49,9 +70,25 @@ struct ComputeLayer {
 }
 
 fn main() -> Fallible<()> {
+    let opt = Opt::from_args();
+
+    let program_start = Instant::now();
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop)?;
     let mut gpu = GPU::new(&window, Default::default())?;
+
+    let dimensions = match opt.dimensions.as_str() {
+        "1080p" => [1920, 1080],
+        "720p" => [1280, 720],
+        "180p" => [320, 180],
+        "144p" => [256, 144],
+        _ => [1920, 1080],
+    };
+    let texture_extent = wgpu::Extent3d {
+        width: dimensions[0],
+        height: dimensions[1],
+        depth: 1,
+    };
 
     // Compute Resources
     let uni_shader = gpu.create_shader_module(include_bytes!("../target/uni_shader.comp.spirv"))?;
@@ -96,20 +133,14 @@ fn main() -> Fallible<()> {
                     entry_point: "main",
                 },
             });
-    // TODO: make configurable
     let config_buffer_size = mem::size_of::<Configuration>() as wgpu::BufferAddress;
     let config_buffer = gpu
         .device()
         .create_buffer_mapped(1, wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::MAP_READ)
         .fill_from_slice(&[Configuration {
-            texture_size: [1920, 1080],
-            texture_offsets: [0, 420],
+            texture_size: [texture_extent.width, texture_extent.height],
+            texture_offsets: [0, (texture_extent.width - texture_extent.height) / 2],
         }]);
-    let texture_extent = wgpu::Extent3d {
-        width: 1920,
-        height: 1080,
-        depth: 1,
-    };
     let instr_buffer_size = InstructionEncoder::instruction_buffer_size();
     let pool_buffer_size = InstructionEncoder::pool_buffer_size();
     let texture_sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
@@ -354,10 +385,26 @@ fn main() -> Fallible<()> {
         ],
     });
 
-    let mut rng = thread_rng();
-    let mut tree = Tree::new(&mut rng);
-    println!("tree: {}", tree.show());
+    let mut rng = if let Some(seed) = opt.seed {
+        if let Ok(u) = seed.parse::<u64>() {
+            StdRng::seed_from_u64(u)
+        } else {
+            let mut hasher = Sha3_256::new();
+            hasher.input(seed);
+            let mut sized_result = [0u8; 32];
+            sized_result.copy_from_slice(&hasher.result());
+            StdRng::from_seed(sized_result)
+        }
+    } else {
+        StdRng::from_entropy()
+    };
 
+    let mut tree = Tree::new(&mut rng);
+    if opt.show_tree {
+        println!("tree: {}", tree.show());
+    }
+
+    let show_long_frames = opt.show_long_frames;
     let mut last_redraw = Instant::now();
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -453,7 +500,14 @@ fn main() -> Fallible<()> {
                 }
                 frame.finish();
 
-                println!("frame time: {:?}", last_redraw.elapsed());
+                let frame_time = last_redraw.elapsed();
+                if show_long_frames && frame_time >= Duration::from_millis(17) {
+                    println!(
+                        "@{:?}: frame time: {:?}",
+                        program_start.elapsed(),
+                        frame_time
+                    );
+                }
                 last_redraw = Instant::now();
             }
             Event::WindowEvent {

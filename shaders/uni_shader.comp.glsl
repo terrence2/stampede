@@ -18,7 +18,9 @@
 // In order to facilitate fixed frame rates, we specify a fixed size instruction stream. If the current
 // invocation is shorter, it will just get padded with nops.
 #define INSTRUCTION_COUNT 128
+#define INSTRUCTION_VECS (INSTRUCTION_COUNT / 4)
 #define CONSTANT_POOL_SIZE 1024
+#define CONSTANT_POOL_VECS (CONSTANT_POOL_SIZE / 4)
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(binding = 0) uniform readonly Configuration {
@@ -27,11 +29,15 @@ layout(binding = 0) uniform readonly Configuration {
 };
 layout(binding = 1, r32f) uniform writeonly image2D result_texture;
 layout(binding = 2) uniform readonly InstructionStream {
-    uint instrs[INSTRUCTION_COUNT];
+    ivec4 instrs[INSTRUCTION_COUNT];
 };
 layout(binding = 3) uniform readonly ConstantPool {
-    vec4 constant_pool[CONSTANT_POOL_SIZE];
+    vec4 constant_pool[CONSTANT_POOL_VECS];
 };
+
+uint get_instr(in uint offset) {
+    return instrs[offset / 4][offset % 4];
+}
 
 float pop_const(inout uint position) {
     float c = constant_pool[position / 4][position % 4];
@@ -47,7 +53,7 @@ float interpret(vec2 position)
     float size;
 
     for (int i = 0; i < INSTRUCTION_COUNT; ++i) {
-        uint instr = instrs[i];
+        uint instr = get_instr(i);
         uint const_count = (instr >> 16) & 0xFF;
         uint child_count = (instr >> 8) & 0xFF;
         uint op = instr & 0xFF;
@@ -213,6 +219,5 @@ void main()
     );
 
     float result = (interpret(position) + 1.0) / 2.0;
-
     imageStore(result_texture, pixel_index, vec4(result, 0, 0, 0));
 }
