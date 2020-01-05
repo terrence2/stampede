@@ -54,10 +54,49 @@ vec3 lab2rgb( vec3 c ) {
     return xyz2rgb( lab2xyz( vec3(100.0 * c.x, 2.0 * 127.0 * (c.y - 0.5), 2.0 * 127.0 * (c.z - 0.5)) ) );
 }
 
+vec3 hsl2rgb( in vec3 c )
+{
+    vec3 rgb = clamp( abs(mod(c.x*6.0+vec3(0.0,4.0,2.0),6.0)-3.0)-1.0, 0.0, 1.0 );
+    return c.z + c.y * (rgb-0.5)*(1.0-abs(2.0*c.z-1.0));
+}
+
+vec3 hsv2rgb(vec3 c)
+{
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
 void main() {
     // Project into RGB from a more linear color space to avoid causing (extra) non-uniform color shifts.
+    /*
+    // LAB
     float l = 100 * texture(sampler2D(r_texture, r_sampler), v_tex_coord).r;
     float a = (255 * texture(sampler2D(g_texture, g_sampler), v_tex_coord).r) - 128;
     float b = (255 * texture(sampler2D(b_texture, b_sampler), v_tex_coord).r) - 128;
     f_color = vec4(lab2rgb(vec3(l, a, b)), 1);
+    */
+
+    // HSV
+    float h = 360 * texture(sampler2D(r_texture, r_sampler), v_tex_coord).r;
+    float s = (0.9 * texture(sampler2D(g_texture, g_sampler), v_tex_coord).r) + 0.1;
+    float v = (0.9 * texture(sampler2D(b_texture, b_sampler), v_tex_coord).r) + 0.1;
+    f_color = vec4(hsv2rgb(vec3(h, s, v)), 1);
+
+    /*
+    // HSL
+    float h = 360 * texture(sampler2D(r_texture, r_sampler), v_tex_coord).r;
+    float s = texture(sampler2D(g_texture, g_sampler), v_tex_coord).r;
+    float l = texture(sampler2D(b_texture, b_sampler), v_tex_coord).r;
+    f_color = vec4(hsl2rgb(vec3(h, s, l)), 1);
+    */
+
+    /*
+    // RGB
+    float r = texture(sampler2D(r_texture, r_sampler), v_tex_coord).r;
+    float g = texture(sampler2D(g_texture, g_sampler), v_tex_coord).r;
+    float b = texture(sampler2D(b_texture, b_sampler), v_tex_coord).r;
+    f_color = vec4(r, g, b, 1);
+    */
+
 }
